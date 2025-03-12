@@ -1,0 +1,155 @@
+package com.taskmanagement;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.taskmanagement.dto.TaskDTO;
+import com.taskmanagement.model.*;
+import com.taskmanagement.repository.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.ZonedDateTime;
+import java.util.Collections;
+import java.util.UUID;
+
+import static org.hamcrest.Matchers.is;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+@SpringBootTest
+@AutoConfigureMockMvc
+@ActiveProfiles("test")
+@Transactional
+class TaskIntegrationTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private RoleRepository roleRepository;
+
+    @Autowired
+    private TaskStatusRepository statusRepository;
+
+    @Autowired
+    private TaskPriorityRepository priorityRepository;
+
+    private User testUser;
+    private TaskStatus todoStatus;
+    private TaskPriority mediumPriority;
+    private TaskDTO taskDTO;
+
+    @BeforeEach
+    void setup() {
+        // Create test role if not exists
+        Role developerRole = roleRepository.findByName("DEVELOPER")
+                .orElseGet(() -> {
+                    Role role = new Role();
+                    role.setId(UUID.randomUUID());
+                    role.setName("DEVELOPER");
+                    role.setDescription("Developer role for testing");
+                    return roleRepository.save(role);
+                });
+
+        // Create test user if not exists
+        testUser = userRepository.findByEmail("test@example.com")
+                .orElseGet(() -> {
+                    User user = new User();
+                    user.setId(UUID.randomUUID());
+                    user.setName("Test User");
+                    user.setEmail("test@example.com");
+                    user.setGoogleId("test-google-id");
+                    user.setRole(developerRole);
+                    return userRepository.save(user);
+                });
+
+        // Create task status if not exists
+        todoStatus = statusRepository.findAll().stream()
+                .filter(s -> s.getName().equals("TODO"))
+                .findFirst()
+                .orElseGet(() -> {
+                    TaskStatus status = new TaskStatus();
+                    status.setId(UUID.randomUUID());
+                    status.setName("TODO");
+                    status.setDisplayOrder(1);
+                    return statusRepository.save(status);
+                });
+
+        // Create task priority if not exists
+        mediumPriority = priorityRepository.findAll().stream()
+                .filter(p -> p.getName().equals("MEDIUM"))
+                .findFirst()
+                .orElseGet(() -> {
+                    TaskPriority priority = new TaskPriority();
+                    priority.setId(UUID.randomUUID());
+                    priority.setName("MEDIUM");
+                    priority.setValue(2);
+                    return priorityRepository.save(priority);
+                });
+
+        // Setup task DTO
+        taskDTO = new TaskDTO();
+        taskDTO.setTitle("Integration Test Task");
+        taskDTO.setDescription("This is a task created by integration test");
+        taskDTO.setAssignedToId(testUser.getId());
+        taskDTO.setStatusId(todoStatus.getId());
+        taskDTO.setPriorityId(mediumPriority.getId());
+        taskDTO.setStoryPoints(3);
+        taskDTO.setEstimatedHours(8);
+        taskDTO.setDueDate(ZonedDateTime.now().plusDays(7));
+    }
+
+    @Test
+    void crudOperationsIntegrationTest() throws Exception {
+        // 1. Create task
+        String taskJson = mockMvc.perform(post("/api/tasks")
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_DEVELOPER"))
+                        .jwt(jwt -> jwt.subject(testUser.getId().toString())))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(taskDTO)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.title", is("Integration Test Task")))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        TaskDTO createdTask = objectMapper.readValue(taskJson, TaskDTO.class);
+        UUID taskId = createdTask.getId();
+
+        // 2. Get task by ID
+        mockMvc.perform(get("/api/tasks/{id}", taskId)
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_DEVELOPER"))
+                        .jwt(jwt -> jwt.subject(testUser.getId().toString()))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id", is(taskId.toString())))
+                .andExpect(jsonPath("$.title", is("Integration Test Task")));
+
+        // 3. Update task
+        createdTask.setTitle("Updated Integration Test Task");
+        mockMvc.perform(put("/api/tasks/{id}", taskId)
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_DEVELOPER"))
+                        .jwt(jwt -> jwt.subject(testUser.getId().toString())))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createdTask)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id", is(taskId.toString())))
+                .andExpect(jsonPath("$.title", is("Updated Integration Test Task")));
+
+        // 4. Get all tasks
+        mockMvc.perform(get("/api/tasks")
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_DEVELOPER"))
+                
