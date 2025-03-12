@@ -1,0 +1,90 @@
+name: Deploy to AWS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v3
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+    
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_wrapper: false
+    
+    - name: Terraform Init and Apply
+      run: |
+        cd infrastructure/terraform
+        terraform init
+        terraform apply -auto-approve \
+          -var="db_username=${{ secrets.DB_USERNAME }}" \
+          -var="db_password=${{ secrets.DB_PASSWORD }}" \
+          -var="google_client_id=${{ secrets.GOOGLE_CLIENT_ID }}"
+
+    - name: Get ALB DNS Name
+      id: get_alb_dns
+      run: |
+        cd infrastructure/terraform
+        ALB_DNS=$(terraform output -raw alb_dns_name)
+        echo "alb_dns=$ALB_DNS" >> $GITHUB_ENV
+        echo "API_BASE_URL=http://$ALB_DNS/api" >> $GITHUB_ENV
+        echo "ALB DNS is: $ALB_DNS"
+
+    - name: Get DB Endpoint
+      id: get_endpoint
+      run: |
+        cd infrastructure/terraform
+        DB_ENDPOINT=$(terraform output -raw db_endpoint)
+        echo "DB endpoint is: $DB_ENDPOINT"
+        echo "db_endpoint=$DB_ENDPOINT" >> $GITHUB_ENV
+
+    - name: Build with Gradle
+      run: |
+        chmod +x gradlew
+        ./gradlew build -PAPI_BASE_URL=$API_BASE_URL -PGOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }} -PJWT_SECRET=${{ secrets.JWT_SECRET }} -PDB_USERNAME=${{ secrets.DB_USERNAME }} -PDB_PASSWORD=${{ secrets.DB_PASSWORD }} -PDB_CONNECTION_STRING=jdbc:postgresql://$db_endpoint/taskmanagement
+
+    - name: Run Flyway Migration
+      run: |
+        echo "Using DB endpoint: $db_endpoint"
+        ./gradlew flywayMigrate \
+          -Dflyway.url=jdbc:postgresql://$db_endpoint/taskmanagement \
+          -Dflyway.user=${{ secrets.DB_USERNAME }} \
+          -Dflyway.password=${{ secrets.DB_PASSWORD }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+    
+    - name: Build and push Docker image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: task-management
+        IMAGE_TAG: latest
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f server/Dockerfile .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+    - name: Upload CLI to S3
+      run: |
+        aws s3 cp cli/build/libs/taskmanagement-cli.jar s3://task-management-user-cli/taskmanagement-cli-latest.jar
+
+    - name: Force new deployment
+      run: |
+        aws ecs update-service --cluster task-management-cluster --service task-management-service --force-new-deployment

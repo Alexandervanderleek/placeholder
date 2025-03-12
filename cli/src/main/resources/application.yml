@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: task-management-cli
+  main:
+    web-application-type: none
+    allow-bean-definition-overriding: true
+  banner:
+    location: classpath:banner.txt
+    enabled: false
+
+cli:
+  api:
+    base-url: ${API_BASE_URL}
+  auth:
+    google:
+      client-id: ${GOOGLE_CLIENT_ID}
+
+spring.shell:
+  command:
+    history:
+      enabled: true
+    help:
+      enabled: true
+    version:
+      enabled: true
+  interactive:
+    enabled: true
+  jline:
+    ansi: always
+    color:
+      enabled: true

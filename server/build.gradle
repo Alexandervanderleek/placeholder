@@ -1,0 +1,48 @@
+plugins {
+    id 'org.springframework.boot'
+    id 'io.spring.dependency-management'
+    id 'org.flywaydb.flyway' version '9.21.1'
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    
+    implementation 'org.postgresql:postgresql'
+    implementation 'org.flywaydb:flyway-core'
+    
+    implementation 'io.jsonwebtoken:jjwt-api:0.11.5'
+    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.11.5'
+    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.11.5'
+    implementation 'com.google.api-client:google-api-client:2.2.0'
+    
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.security:spring-security-test'
+    testImplementation 'com.h2database:h2'
+}
+
+flyway {
+    url = 'jdbc:postgresql://localhost:5432/taskmanagement'
+    user = 'postgres'
+    password = 'admin'
+    baselineOnMigrate = true
+}
+
+processResources {
+    filesMatching("application.yml") {
+        expand([
+                JWT_SECRET:project.findProperty("JWT_SECRET") ?: "yoursercretkeyyoursercretkeyyoursercretkeyyoursercretkey",
+                GOOGLE_CLIENT_ID:project.findProperty("GOOGLE_CLIENT_ID") ?: "placeholder",
+                DB_PASSWORD:project.findProperty("DB_PASSWORD") ?: "placeholderdbpassword",
+                DB_USERNAME:project.findProperty("DB_USERNAME") ?: "placeholderdbuser",
+                DB_CONNECTION_STRING:project.findProperty("DB_CONNECTION_STRING") ?: "jdbc:postgresql://localhost:5432/taskmanagement",
+        ])
+    }
+}
+
+
+bootJar {
+    archiveFileName = 'taskmanagement-server.jar'
+}
