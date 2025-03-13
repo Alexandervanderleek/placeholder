@@ -1,0 +1,282 @@
+package com.taskmanagement;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.taskmanagement.dto.TaskDTO;
+import com.taskmanagement.model.*;
+import com.taskmanagement.repository.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+
+import static org.hamcrest.Matchers.*;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+@SpringBootTest
+@AutoConfigureMockMvc
+@ActiveProfiles("test")
+@Transactional
+class TaskIntegrationTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private RoleRepository roleRepository;
+
+    @Autowired
+    private TaskStatusRepository statusRepository;
+
+    @Autowired
+    private TaskPriorityRepository priorityRepository;
+
+    @Autowired
+    private EpicRepository epicRepository;
+
+    @Autowired
+    private SprintRepository sprintRepository;
+
+    private User testUser;
+    private TaskStatus todoStatus;
+    private TaskStatus inProgressStatus;
+    private TaskPriority mediumPriority;
+    private Epic testEpic;
+    private Sprint testSprint;
+    private TaskDTO taskDTO;
+
+    @BeforeEach
+    void setup() {
+        // Create or find role
+        Role role = roleRepository.findByName("ADMIN")
+                .orElseGet(() -> {
+                    Role newRole = new Role();
+                    newRole.setId(UUID.randomUUID());
+                    newRole.setName("ADMIN");
+                    newRole.setDescription("Administrator role");
+                    return roleRepository.save(newRole);
+                });
+
+        // Create test user
+        testUser = new User();
+        testUser.setId(UUID.randomUUID());
+        testUser.setName("Integration Test User");
+        testUser.setEmail("integration-test@example.com");
+        testUser.setGoogleId("test-" + UUID.randomUUID());
+        testUser.setRole(role);
+        testUser = userRepository.save(testUser);
+
+        // Create task statuses if not exist
+        todoStatus = statusRepository.findAll().stream()
+                .filter(s -> s.getName().equals("TODO"))
+                .findFirst()
+                .orElseGet(() -> {
+                    TaskStatus status = new TaskStatus();
+                    status.setId(UUID.randomUUID());
+                    status.setName("TODO");
+                    status.setDisplayOrder(1);
+                    return statusRepository.save(status);
+                });
+
+        inProgressStatus = statusRepository.findAll().stream()
+                .filter(s -> s.getName().equals("IN_PROGRESS"))
+                .findFirst()
+                .orElseGet(() -> {
+                    TaskStatus status = new TaskStatus();
+                    status.setId(UUID.randomUUID());
+                    status.setName("IN_PROGRESS");
+                    status.setDisplayOrder(2);
+                    return statusRepository.save(status);
+                });
+
+        // Create task priority if not exist
+        mediumPriority = priorityRepository.findAll().stream()
+                .filter(p -> p.getName().equals("MEDIUM"))
+                .findFirst()
+                .orElseGet(() -> {
+                    TaskPriority priority = new TaskPriority();
+                    priority.setId(UUID.randomUUID());
+                    priority.setName("MEDIUM");
+                    priority.setValue(2);
+                    return priorityRepository.save(priority);
+                });
+
+        // Create test epic
+        testEpic = new Epic();
+        testEpic.setId(UUID.randomUUID());
+        testEpic.setName("Integration Test Epic");
+        testEpic.setDescription("Epic created for integration testing");
+        testEpic.setOwner(testUser);
+        testEpic.setStoryPoints(10);
+        testEpic.setStartDate(ZonedDateTime.now());
+        testEpic.setTargetEndDate(ZonedDateTime.now().plusMonths(1));
+        testEpic = epicRepository.save(testEpic);
+
+        // Create test sprint
+        testSprint = new Sprint();
+        testSprint.setId(UUID.randomUUID());
+        testSprint.setName("Integration Test Sprint");
+        testSprint.setGoal("Sprint created for integration testing");
+        testSprint.setScrumMaster(testUser);
+        testSprint.setCapacityPoints(20);
+        testSprint.setStartDate(ZonedDateTime.now());
+        testSprint.setEndDate(ZonedDateTime.now().plusWeeks(2));
+        testSprint.setActive(true);
+        testSprint = sprintRepository.save(testSprint);
+
+        // Setup task DTO for testing
+        taskDTO = new TaskDTO();
+        taskDTO.setTitle("Integration Test Task");
+        taskDTO.setDescription("Task created for integration testing");
+        taskDTO.setAssignedToId(testUser.getId());
+        taskDTO.setStatusId(todoStatus.getId());
+        taskDTO.setPriorityId(mediumPriority.getId());
+        taskDTO.setStoryPoints(3);
+        taskDTO.setEstimatedHours(8);
+        taskDTO.setDueDate(ZonedDateTime.now().plusDays(7));
+    }
+
+    @Test
+    void taskCRUD_ShouldPerformFullLifecycle() throws Exception {
+        // 1. Create task
+        String taskJson = mockMvc.perform(post("/api/tasks")
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))
+                        .jwt(jwt -> jwt.subject(testUser.getId().toString())))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(taskDTO)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.title", is("Integration Test Task")))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        // Extract task ID from response
+        Map<String, Object> createdTaskMap = objectMapper.readValue(taskJson, HashMap.class);
+        String taskId = createdTaskMap.get("id").toString();
+
+        // 2. Get task by ID
+        mockMvc.perform(get("/api/tasks/{id}", taskId)
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))
+                        .jwt(jwt -> jwt.subject(testUser.getId().toString()))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id", is(taskId)))
+                .andExpect(jsonPath("$.title", is("Integration Test Task")))
+                .andExpect(jsonPath("$.assignedToName", is("Integration Test User")))
+                .andExpect(jsonPath("$.statusName", is("TODO")));
+
+        // 3. Update task
+        TaskDTO updateDTO = new TaskDTO();
+        updateDTO.setId(UUID.fromString(taskId));
+        updateDTO.setTitle("Updated Task Title");
+        updateDTO.setDescription("Updated description");
+        updateDTO.setAssignedToId(testUser.getId());
+        updateDTO.setStatusId(todoStatus.getId());
+        updateDTO.setPriorityId(mediumPriority.getId());
+        updateDTO.setStoryPoints(5);
+        updateDTO.setEstimatedHours(13);
+        updateDTO.setDueDate(ZonedDateTime.now().plusDays(14));
+
+        mockMvc.perform(put("/api/tasks/{id}", taskId)
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))
+                        .jwt(jwt -> jwt.subject(testUser.getId().toString())))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(updateDTO)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.title", is("Updated Task Title")))
+                .andExpect(jsonPath("$.storyPoints", is(5)))
+                .andExpect(jsonPath("$.estimatedHours", is(13)));
+
+        // 4. Change task status
+        mockMvc.perform(patch("/api/tasks/{id}/status/{statusId}", taskId, inProgressStatus.getId())
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))
+                        .jwt(jwt -> jwt.subject(testUser.getId().toString()))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.statusName", is("IN_PROGRESS")));
+
+        // 5. Add task to epic
+        mockMvc.perform(patch("/api/tasks/{id}/add-to-epic/{epicId}", taskId, testEpic.getId())
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))
+                        .jwt(jwt -> jwt.subject(testUser.getId().toString()))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.epicId", is(testEpic.getId().toString())))
+                .andExpect(jsonPath("$.epicName", is("Integration Test Epic")));
+
+        // 6. Add task to sprint
+        mockMvc.perform(patch("/api/tasks/{id}/add-to-sprint/{sprintId}", taskId, testSprint.getId())
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))
+                        .jwt(jwt -> jwt.subject(testUser.getId().toString()))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sprintId", is(testSprint.getId().toString())))
+                .andExpect(jsonPath("$.sprintName", is("Integration Test Sprint")));
+
+        // 7. Get all tasks and verify the created task is included
+        mockMvc.perform(get("/api/tasks")
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))
+                        .jwt(jwt -> jwt.subject(testUser.getId().toString()))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].id", hasItem(taskId)));
+
+        // 8. Filter tasks by sprint
+        mockMvc.perform(post("/api/tasks/filter")
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))
+                        .jwt(jwt -> jwt.subject(testUser.getId().toString())))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"sprintId\": \"" + testSprint.getId() + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].id", hasItem(taskId)));
+
+        // 9. Filter tasks by epic
+        mockMvc.perform(post("/api/tasks/filter")
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))
+                        .jwt(jwt -> jwt.subject(testUser.getId().toString())))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"epicId\": \"" + testEpic.getId() + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].id", hasItem(taskId)));
+
+        // 10. Remove task from sprint
+        mockMvc.perform(patch("/api/tasks/{id}/remove-from-sprint", taskId)
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))
+                        .jwt(jwt -> jwt.subject(testUser.getId().toString()))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sprintId").doesNotExist());
+
+        // 11. Remove task from epic
+        mockMvc.perform(patch("/api/tasks/{id}/remove-from-epic", taskId)
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))
+                        .jwt(jwt -> jwt.subject(testUser.getId().toString()))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.epicId").doesNotExist());
+
+        // 12. Delete task
+        mockMvc.perform(delete("/api/tasks/{id}", taskId)
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))
+                        .jwt(jwt -> jwt.subject(testUser.getId().toString()))))
+                .andExpect(status().isNoContent());
+
+        // 13. Verify task is deleted
+        mockMvc.perform(get("/api/tasks/{id}", taskId)
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))
+                        .jwt(jwt -> jwt.subject(testUser.getId().toString()))))
+                .andExpect(status().isNotFound());
+    }
+}

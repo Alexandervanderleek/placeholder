@@ -1,0 +1,376 @@
+package com.taskmanagement.repository;
+
+import com.taskmanagement.model.*;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
+import org.springframework.test.context.ActiveProfiles;
+
+import java.time.ZonedDateTime;
+import java.util.List;
+import java.util.UUID;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+@DataJpaTest
+@ActiveProfiles("test")
+class TaskRepositoryTest {
+
+    @Autowired
+    private TestEntityManager entityManager;
+
+    @Autowired
+    private TaskRepository taskRepository;
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private TaskStatusRepository statusRepository;
+
+    @Autowired
+    private TaskPriorityRepository priorityRepository;
+
+    @Autowired
+    private EpicRepository epicRepository;
+
+    @Autowired
+    private SprintRepository sprintRepository;
+
+    private User createTestUser(String name, String email) {
+        Role role = new Role();
+        role.setId(UUID.randomUUID());
+        role.setName("DEVELOPER");
+        role.setDescription("Developer role");
+        entityManager.persist(role);
+        
+        User user = new User();
+        user.setId(UUID.randomUUID());
+        user.setName(name);
+        user.setEmail(email);
+        user.setGoogleId(UUID.randomUUID().toString());
+        user.setRole(role);
+        return entityManager.persist(user);
+    }
+
+    private TaskStatus createTaskStatus(String name, int order) {
+        TaskStatus status = new TaskStatus();
+        status.setId(UUID.randomUUID());
+        status.setName(name);
+        status.setDisplayOrder(order);
+        return entityManager.persist(status);
+    }
+
+    private TaskPriority createTaskPriority(String name, int value) {
+        TaskPriority priority = new TaskPriority();
+        priority.setId(UUID.randomUUID());
+        priority.setName(name);
+        priority.setValue(value);
+        return entityManager.persist(priority);
+    }
+
+    private Epic createEpic(User owner, String name) {
+        Epic epic = new Epic();
+        epic.setId(UUID.randomUUID());
+        epic.setName(name);
+        epic.setDescription("Test epic description");
+        epic.setOwner(owner);
+        epic.setStoryPoints(10);
+        epic.setStartDate(ZonedDateTime.now());
+        epic.setTargetEndDate(ZonedDateTime.now().plusMonths(1));
+        return entityManager.persist(epic);
+    }
+
+    private Sprint createSprint(User scrumMaster, String name, boolean isActive) {
+        Sprint sprint = new Sprint();
+        sprint.setId(UUID.randomUUID());
+        sprint.setName(name);
+        sprint.setGoal("Test sprint goal");
+        sprint.setScrumMaster(scrumMaster);
+        sprint.setCapacityPoints(20);
+        sprint.setStartDate(ZonedDateTime.now());
+        sprint.setEndDate(ZonedDateTime.now().plusWeeks(2));
+        sprint.setActive(isActive);
+        return entityManager.persist(sprint);
+    }
+
+    private Task createTask(User creator, User assignee, TaskStatus status, TaskPriority priority, String title) {
+        Task task = new Task();
+        task.setId(UUID.randomUUID());
+        task.setTitle(title);
+        task.setDescription("Test description");
+        task.setCreatedBy(creator);
+        task.setAssignedTo(assignee);
+        task.setStatus(status);
+        task.setPriority(priority);
+        task.setStoryPoints(3);
+        task.setEstimatedHours(8);
+        task.setDueDate(ZonedDateTime.now().plusDays(7));
+        return entityManager.persist(task);
+    }
+
+    @Test
+    void findByAssignedTo_ShouldReturnTasksAssignedToUser() {
+        // Arrange
+        User user1 = createTestUser("User 1", "user1@example.com");
+        User user2 = createTestUser("User 2", "user2@example.com");
+        
+        TaskStatus todoStatus = createTaskStatus("TODO", 1);
+        TaskPriority mediumPriority = createTaskPriority("MEDIUM", 2);
+        
+        Task task1 = createTask(user1, user1, todoStatus, mediumPriority, "Task 1");
+        Task task2 = createTask(user1, user2, todoStatus, mediumPriority, "Task 2");
+        Task task3 = createTask(user2, user1, todoStatus, mediumPriority, "Task 3");
+        
+        entityManager.flush();
+        
+        // Act
+        List<Task> tasksForUser1 = taskRepository.findByAssignedTo(user1);
+        List<Task> tasksForUser2 = taskRepository.findByAssignedTo(user2);
+        
+        // Assert
+        assertEquals(2, tasksForUser1.size());
+        assertEquals(1, tasksForUser2.size());
+        assertTrue(tasksForUser1.stream().anyMatch(t -> t.getTitle().equals("Task 1")));
+        assertTrue(tasksForUser1.stream().anyMatch(t -> t.getTitle().equals("Task 3")));
+        assertTrue(tasksForUser2.stream().anyMatch(t -> t.getTitle().equals("Task 2")));
+    }
+
+    @Test
+    void findByStatusName_ShouldReturnTasksWithSpecificStatus() {
+        // Arrange
+        User user = createTestUser("Test User", "test@example.com");
+        
+        TaskStatus todoStatus = createTaskStatus("TODO", 1);
+        TaskStatus inProgressStatus = createTaskStatus("IN_PROGRESS", 2);
+        TaskPriority mediumPriority = createTaskPriority("MEDIUM", 2);
+        
+        Task task1 = createTask(user, user, todoStatus, mediumPriority, "Task 1");
+        Task task2 = createTask(user, user, inProgressStatus, mediumPriority, "Task 2");
+        Task task3 = createTask(user, user, todoStatus, mediumPriority, "Task 3");
+        
+        entityManager.flush();
+        
+        // Act
+        List<Task> todoTasks = taskRepository.findByStatusName("TODO");
+        List<Task> inProgressTasks = taskRepository.findByStatusName("IN_PROGRESS");
+        
+        // Assert
+        assertEquals(2, todoTasks.size());
+        assertEquals(1, inProgressTasks.size());
+        assertTrue(todoTasks.stream().anyMatch(t -> t.getTitle().equals("Task 1")));
+        assertTrue(todoTasks.stream().anyMatch(t -> t.getTitle().equals("Task 3")));
+        assertTrue(inProgressTasks.stream().anyMatch(t -> t.getTitle().equals("Task 2")));
+    }
+
+    @Test
+    void findByEpicId_ShouldReturnTasksForSpecificEpic() {
+        // Arrange
+        User user = createTestUser("Test User", "test@example.com");
+        
+        TaskStatus todoStatus = createTaskStatus("TODO", 1);
+        TaskPriority mediumPriority = createTaskPriority("MEDIUM", 2);
+        
+        Epic epic1 = createEpic(user, "Epic 1");
+        Epic epic2 = createEpic(user, "Epic 2");
+        
+        Task task1 = createTask(user, user, todoStatus, mediumPriority, "Task 1");
+        Task task2 = createTask(user, user, todoStatus, mediumPriority, "Task 2");
+        Task task3 = createTask(user, user, todoStatus, mediumPriority, "Task 3");
+        
+        task1.setEpic(epic1);
+        task2.setEpic(epic2);
+        entityManager.persist(task1);
+        entityManager.persist(task2);
+        entityManager.persist(task3);
+        
+        entityManager.flush();
+        
+        // Act
+        List<Task> epic1Tasks = taskRepository.findByEpicId(epic1.getId());
+        List<Task> epic2Tasks = taskRepository.findByEpicId(epic2.getId());
+        
+        // Assert
+        assertEquals(1, epic1Tasks.size());
+        assertEquals(1, epic2Tasks.size());
+        assertEquals("Task 1", epic1Tasks.get(0).getTitle());
+        assertEquals("Task 2", epic2Tasks.get(0).getTitle());
+    }
+
+    @Test
+    void findBySprintId_ShouldReturnTasksForSpecificSprint() {
+        // Arrange
+        User user = createTestUser("Test User", "test@example.com");
+        
+        TaskStatus todoStatus = createTaskStatus("TODO", 1);
+        TaskPriority mediumPriority = createTaskPriority("MEDIUM", 2);
+        
+        Sprint sprint1 = createSprint(user, "Sprint 1", true);
+        Sprint sprint2 = createSprint(user, "Sprint 2", true);
+        
+        Task task1 = createTask(user, user, todoStatus, mediumPriority, "Task 1");
+        Task task2 = createTask(user, user, todoStatus, mediumPriority, "Task 2");
+        Task task3 = createTask(user, user, todoStatus, mediumPriority, "Task 3");
+        
+        task1.setSprint(sprint1);
+        task2.setSprint(sprint2);
+        entityManager.persist(task1);
+        entityManager.persist(task2);
+        entityManager.persist(task3);
+        
+        entityManager.flush();
+        
+        // Act
+        List<Task> sprint1Tasks = taskRepository.findBySprintId(sprint1.getId());
+        List<Task> sprint2Tasks = taskRepository.findBySprintId(sprint2.getId());
+        
+        // Assert
+        assertEquals(1, sprint1Tasks.size());
+        assertEquals(1, sprint2Tasks.size());
+        assertEquals("Task 1", sprint1Tasks.get(0).getTitle());
+        assertEquals("Task 2", sprint2Tasks.get(0).getTitle());
+    }
+
+    @Test
+    void findUserActiveTasks_ShouldReturnActiveTasksForUser() {
+        // Arrange
+        User user1 = createTestUser("User 1", "user1@example.com");
+        User user2 = createTestUser("User 2", "user2@example.com");
+        
+        TaskStatus todoStatus = createTaskStatus("TODO", 1);
+        TaskStatus doneStatus = createTaskStatus("DONE", 3);
+        TaskPriority mediumPriority = createTaskPriority("MEDIUM", 2);
+        
+        Task task1 = createTask(user1, user1, todoStatus, mediumPriority, "Task 1");
+        Task task2 = createTask(user1, user1, doneStatus, mediumPriority, "Task 2");
+        task2.setCompletedAt(ZonedDateTime.now());
+        Task task3 = createTask(user1, user2, todoStatus, mediumPriority, "Task 3");
+        
+        entityManager.persist(task1);
+        entityManager.persist(task2);
+        entityManager.persist(task3);
+        
+        entityManager.flush();
+        
+        // Act
+        List<Task> user1ActiveTasks = taskRepository.findUserActiveTasks(user1.getId());
+        List<Task> user2ActiveTasks = taskRepository.findUserActiveTasks(user2.getId());
+        
+        // Assert
+        assertEquals(1, user1ActiveTasks.size());
+        assertEquals(1, user2ActiveTasks.size());
+        assertEquals("Task 1", user1ActiveTasks.get(0).getTitle());
+        assertEquals("Task 3", user2ActiveTasks.get(0).getTitle());
+    }
+
+    @Test
+    void findTasksByFilters_ShouldReturnTasksMatchingFilters() {
+        // Arrange
+        User user1 = createTestUser("User 1", "user1@example.com");
+        User user2 = createTestUser("User 2", "user2@example.com");
+        
+        TaskStatus todoStatus = createTaskStatus("TODO", 1);
+        TaskStatus inProgressStatus = createTaskStatus("IN_PROGRESS", 2);
+        
+        TaskPriority lowPriority = createTaskPriority("LOW", 1);
+        TaskPriority highPriority = createTaskPriority("HIGH", 3);
+        
+        Epic epic = createEpic(user1, "Test Epic");
+        Sprint sprint = createSprint(user1, "Test Sprint", true);
+        
+        Task task1 = createTask(user1, user1, todoStatus, lowPriority, "Task 1");
+        task1.setEpic(epic);
+        task1.setSprint(sprint);
+        
+        Task task2 = createTask(user1, user2, inProgressStatus, highPriority, "Task 2");
+        task2.setEpic(epic);
+        
+        Task task3 = createTask(user2, user1, todoStatus, highPriority, "Task 3");
+        task3.setSprint(sprint);
+        
+        Task task4 = createTask(user2, user2, inProgressStatus, lowPriority, "Task 4");
+        
+        entityManager.persist(task1);
+        entityManager.persist(task2);
+        entityManager.persist(task3);
+        entityManager.persist(task4);
+        
+        entityManager.flush();
+        
+        // Act & Assert
+        
+        // Filter by assignee
+        List<Task> user1Tasks = taskRepository.findTasksByFilters(user1.getId(), null, null, null, null);
+        assertEquals(2, user1Tasks.size());
+        
+        // Filter by status
+        List<Task> todoTasks = taskRepository.findTasksByFilters(null, todoStatus.getId(), null, null, null);
+        assertEquals(2, todoTasks.size());
+        
+        // Filter by priority
+        List<Task> highPriorityTasks = taskRepository.findTasksByFilters(null, null, highPriority.getId(), null, null);
+        assertEquals(2, highPriorityTasks.size());
+        
+        // Filter by sprint
+        List<Task> sprintTasks = taskRepository.findTasksByFilters(null, null, null, sprint.getId(), null);
+        assertEquals(2, sprintTasks.size());
+        
+        // Filter by epic
+        List<Task> epicTasks = taskRepository.findTasksByFilters(null, null, null, null, epic.getId());
+        assertEquals(2, epicTasks.size());
+        
+        // Filter by multiple criteria
+        List<Task> complexFilter = taskRepository.findTasksByFilters(user1.getId(), todoStatus.getId(), null, sprint.getId(), null);
+        assertEquals(1, complexFilter.size());
+        assertEquals("Task 1", complexFilter.get(0).getTitle());
+    }
+
+    @Test
+    void countTasksBySprintAndStatus_ShouldReturnCorrectCount() {
+        // Arrange
+        User user = createTestUser("Test User", "test@example.com");
+        
+        TaskStatus todoStatus = createTaskStatus("TODO", 1);
+        TaskStatus inProgressStatus = createTaskStatus("IN_PROGRESS", 2);
+        TaskStatus doneStatus = createTaskStatus("DONE", 3);
+        
+        TaskPriority mediumPriority = createTaskPriority("MEDIUM", 2);
+        
+        Sprint sprint = createSprint(user, "Test Sprint", true);
+        
+        // Create 2 TODO tasks, 3 IN_PROGRESS tasks, and 1 DONE task in the sprint
+        for (int i = 0; i < 2; i++) {
+            Task task = createTask(user, user, todoStatus, mediumPriority, "Todo Task " + i);
+            task.setSprint(sprint);
+            entityManager.persist(task);
+        }
+        
+        for (int i = 0; i < 3; i++) {
+            Task task = createTask(user, user, inProgressStatus, mediumPriority, "In Progress Task " + i);
+            task.setSprint(sprint);
+            entityManager.persist(task);
+        }
+        
+        Task doneTask = createTask(user, user, doneStatus, mediumPriority, "Done Task");
+        doneTask.setSprint(sprint);
+        doneTask.setCompletedAt(ZonedDateTime.now());
+        entityManager.persist(doneTask);
+        
+        // Create 1 TODO task not in the sprint
+        Task nonSprintTask = createTask(user, user, todoStatus, mediumPriority, "Non Sprint Task");
+        entityManager.persist(nonSprintTask);
+        
+        entityManager.flush();
+        
+        // Act
+        long todoCount = taskRepository.countTasksBySprintAndStatus(sprint.getId(), todoStatus.getId());
+        long inProgressCount = taskRepository.countTasksBySprintAndStatus(sprint.getId(), inProgressStatus.getId());
+        long doneCount = taskRepository.countTasksBySprintAndStatus(sprint.getId(), doneStatus.getId());
+        
+        // Assert
+        assertEquals(2, todoCount);
+        assertEquals(3, inProgressCount);
+        assertEquals(1, doneCount);
+    }
+}
